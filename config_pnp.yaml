@@ -4,14 +4,11 @@ device: 'cuda'
 output_path: 'PNP-results/horse'
 
 # data
-image_path: 'data/horse.jpg'
 latents_path: 'latents_forward'
 
 # diffusion
-sd_version: '2.1'
 guidance_scale: 7.5
 n_timesteps: 50
-prompt: a photo of a pink toy horse on the beach
 negative_prompt: ugly, blurry, black, low res, unrealistic
 
 # pnp injection thresholds, ∈ [0, 1]

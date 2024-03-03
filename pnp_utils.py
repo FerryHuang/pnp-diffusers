@@ -26,10 +26,10 @@ def register_time(model, t):
     setattr(module, 't', t)
 
 
-def load_source_latents_t(t, latents_path):
-    latents_t_path = os.path.join(latents_path, f'noisy_latents_{t}.pt')
+def load_source_latents_t(t, latents_path, device):
+    latents_t_path = os.path.join(latents_path, 'noisy_latents_981.pt')
     assert os.path.exists(latents_t_path), f'Missing latents at t {t} path {latents_t_path}'
-    latents = torch.load(latents_t_path)
+    latents = torch.load(latents_t_path, device)
     return latents
 
 def register_attention_control_efficient(model, injection_schedule):

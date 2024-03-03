@@ -42,7 +42,7 @@ class Preprocess(nn.Module):
         elif self.sd_version == '2.0':
             model_key = "stabilityai/stable-diffusion-2-base"
         elif self.sd_version == '1.5':
-            model_key = "runwayml/stable-diffusion-v1-5"
+            model_key = "/home/htr/stable-diffusion-v1-5-bin"
         elif self.sd_version == 'depth':
             model_key = "stabilityai/stable-diffusion-2-depth"
             self.use_depth = True
@@ -95,7 +95,7 @@ class Preprocess(nn.Module):
         return latents
 
     @torch.no_grad()
-    def ddim_inversion(self, cond, latent, save_path, save_latents=True,
+    def ddim_inversion(self, cond, latent, save_path, save_latents=False,
                                 timesteps_to_save=None):
         timesteps = reversed(self.scheduler.timesteps)
         with torch.autocast(device_type='cuda', dtype=torch.float32):
@@ -117,8 +117,8 @@ class Preprocess(nn.Module):
 
                 pred_x0 = (latent - sigma_prev * eps) / mu_prev
                 latent = mu * pred_x0 + sigma * eps
-                if save_latents:
-                    torch.save(latent, os.path.join(save_path, f'noisy_latents_{t}.pt'))
+                # if save_latents:
+                #     torch.save(latent, os.path.join(save_path, f'noisy_latents_{t}.pt'))
         torch.save(latent, os.path.join(save_path, f'noisy_latents_{t}.pt'))
         return latent
 
@@ -166,14 +166,14 @@ class Preprocess(nn.Module):
         return rgb_reconstruction  # , latent_reconstruction
 
 
-def run(opt):
+def run(opt, image_path, source_prompt):
     # timesteps to save
     if opt.sd_version == '2.1':
         model_key = "stabilityai/stable-diffusion-2-1-base"
     elif opt.sd_version == '2.0':
         model_key = "stabilityai/stable-diffusion-2-base"
     elif opt.sd_version == '1.5':
-        model_key = "runwayml/stable-diffusion-v1-5"
+        model_key = "/home/htr/stable-diffusion-v1-5-bin"
     elif opt.sd_version == 'depth':
         model_key = "stabilityai/stable-diffusion-2-depth"
     toy_scheduler = DDIMScheduler.from_pretrained(model_key, subfolder="scheduler")
@@ -185,15 +185,15 @@ def run(opt):
     seed_everything(opt.seed)
 
     extraction_path_prefix = "_reverse" if opt.extract_reverse else "_forward"
-    save_path = os.path.join(opt.save_dir + extraction_path_prefix, os.path.splitext(os.path.basename(opt.data_path))[0])
+    save_path = os.path.join(opt.save_dir + extraction_path_prefix, os.path.splitext(os.path.basename(image_path))[0])
     os.makedirs(save_path, exist_ok=True)
 
     model = Preprocess(device, sd_version=opt.sd_version, hf_key=None)
-    recon_image = model.extract_latents(data_path=opt.data_path,
+    recon_image = model.extract_latents(data_path=image_path,
                                          num_steps=opt.steps,
                                          save_path=save_path,
                                          timesteps_to_save=timesteps_to_save,
-                                         inversion_prompt=opt.inversion_prompt,
+                                         inversion_prompt=source_prompt,
                                          extract_reverse=opt.extract_reverse)
 
     T.ToPILImage()(recon_image[0]).save(os.path.join(save_path, f'recon.jpg'))
@@ -202,15 +202,22 @@ def run(opt):
 if __name__ == "__main__":
     device = 'cuda'
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data_path', type=str,
-                        default='data/horse.jpg')
+    parser.add_argument("--json_file", type=str, required=True)
+    # parser.add_argument('--data_path', type=str,
+    #                     default='data/horse.jpg')
     parser.add_argument('--save_dir', type=str, default='latents')
-    parser.add_argument('--sd_version', type=str, default='2.1', choices=['1.5', '2.0', '2.1'],
-                        help="stable diffusion version")
+    parser.add_argument('--sd_version', type=str, default='1.5', choices=['1.5', '2.0', '2.1'], help="stable diffusion version")
     parser.add_argument('--seed', type=int, default=1)
     parser.add_argument('--steps', type=int, default=999)
     parser.add_argument('--save-steps', type=int, default=1000)
-    parser.add_argument('--inversion_prompt', type=str, default='')
+    # parser.add_argument('--inversion_prompt', type=str, default='')
     parser.add_argument('--extract-reverse', default=False, action='store_true', help="extract features during the denoising process")
     opt = parser.parse_args()
-    run(opt)
+    import json
+    image_dir = "imagic-editing.github.io/tedbench/originals"
+    with open(opt.json_file) as f:
+        inputs = json.load(f)
+    for input in inputs:
+        image_name, source_text, prompt = input.values()
+        image_path = os.path.join(image_dir, image_name)
+        run(opt, image_path, source_text)

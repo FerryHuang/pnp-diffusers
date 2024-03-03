@@ -17,40 +17,27 @@ from pnp_utils import *
 logging.set_verbosity_error()
 
 class PNP(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config, pipe, scheduler, image_path, prompt, device, save_dir):
         super().__init__()
         self.config = config
-        self.device = config["device"]
-        sd_version = config["sd_version"]
-
-        if sd_version == '2.1':
-            model_key = "stabilityai/stable-diffusion-2-1-base"
-        elif sd_version == '2.0':
-            model_key = "stabilityai/stable-diffusion-2-base"
-        elif sd_version == '1.5':
-            model_key = "runwayml/stable-diffusion-v1-5"
-        else:
-            raise ValueError(f'Stable-diffusion version {sd_version} not supported.')
-
-        # Create SD models
-        print('Loading SD model')
-
-        pipe = StableDiffusionPipeline.from_pretrained(model_key, torch_dtype=torch.float16).to("cuda")
-        pipe.enable_xformers_memory_efficient_attention()
-
+        self.image_path = image_path
+        self.prompt = prompt
+        self.device = torch.device(f"cuda:{device}")
+        self.save_dir = save_dir
+        
         self.vae = pipe.vae
         self.tokenizer = pipe.tokenizer
         self.text_encoder = pipe.text_encoder
         self.unet = pipe.unet
 
-        self.scheduler = DDIMScheduler.from_pretrained(model_key, subfolder="scheduler")
+        self.scheduler = scheduler
         self.scheduler.set_timesteps(config["n_timesteps"], device=self.device)
         print('SD model loaded')
 
         # load image
         self.image, self.eps = self.get_data()
 
-        self.text_embeds = self.get_text_embeds(config["prompt"], config["negative_prompt"])
+        self.text_embeds = self.get_text_embeds(prompt, config["negative_prompt"])
         self.pnp_guidance_embeds = self.get_text_embeds("", "").chunk(2)[0]
 
 
@@ -82,18 +69,19 @@ class PNP(nn.Module):
     @torch.autocast(device_type='cuda', dtype=torch.float32)
     def get_data(self):
         # load image
-        image = Image.open(self.config["image_path"]).convert('RGB') 
+        image = Image.open(self.image_path).convert('RGB') 
         image = image.resize((512, 512), resample=Image.Resampling.LANCZOS)
         image = T.ToTensor()(image).to(self.device)
         # get noise
-        latents_path = os.path.join(self.config["latents_path"], os.path.splitext(os.path.basename(self.config["image_path"]))[0], f'noisy_latents_{self.scheduler.timesteps[0]}.pt')
+        latents_path = os.path.join(self.config["latents_path"], os.path.splitext(os.path.basename(self.image_path))[0], f'noisy_latents_{self.scheduler.timesteps[0]}.pt')
         noisy_latent = torch.load(latents_path).to(self.device)
         return image, noisy_latent
 
     @torch.no_grad()
     def denoise_step(self, x, t):
         # register the time step and features in pnp injection modules
-        source_latents = load_source_latents_t(t, os.path.join(self.config["latents_path"], os.path.splitext(os.path.basename(self.config["image_path"]))[0]))
+        source_latents = load_source_latents_t(t, os.path.join(self.config["latents_path"], 
+                                                               os.path.splitext(os.path.basename(image_path))[0]), self.device)
         latent_model_input = torch.cat([source_latents] + ([x] * 2))
 
         register_time(self, t.item())
@@ -130,7 +118,7 @@ class PNP(nn.Module):
                 x = self.denoise_step(x, t)
 
             decoded_latent = self.decode_latent(x)
-            T.ToPILImage()(decoded_latent[0]).save(f'{self.config["output_path"]}/output-{self.config["prompt"]}.png')
+            T.ToPILImage()(decoded_latent[0]).save(os.path.join(self.save_dir, f'{prompt}.png'))
                 
         return decoded_latent
 
@@ -138,7 +126,12 @@ class PNP(nn.Module):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--config_path', type=str, default='pnp-configs/config-horse.yaml')
+    parser.add_argument("--json_file", type=str)
+    parser.add_argument('--save_dir', type=str, default='output')
+    parser.add_argument('--device', type=str, default='cuda')
     opt = parser.parse_args()
+    os.makedirs(opt.save_dir, exist_ok=True)
+    image_dir = "imagic-editing.github.io/tedbench/originals"
     with open(opt.config_path, "r") as f:
         config = yaml.safe_load(f)
     os.makedirs(config["output_path"], exist_ok=True)
@@ -147,5 +140,19 @@ if __name__ == '__main__':
     
     seed_everything(config["seed"])
     print(config)
-    pnp = PNP(config)
-    pnp.run_pnp()
+
+    # Create SD models 
+    print('Loading SD model')
+
+    pipe = StableDiffusionPipeline.from_pretrained("/home/htr/stable-diffusion-v1-5-bin", torch_dtype=torch.float16).to(
+        torch.device(f"cuda:{opt.device}"))
+    pipe.enable_xformers_memory_efficient_attention()
+    scheduler = DDIMScheduler.from_pretrained("/home/htr/stable-diffusion-v1-5-bin", subfolder="scheduler")
+    import json
+    with open(opt.json_file) as f:
+        inputs = json.load(f)
+    for input in inputs:
+        image_name, source_text, prompt = input.values()
+        image_path = os.path.join(image_dir, image_name)
+        pnp = PNP(config, pipe, scheduler, image_path, prompt, opt.device, opt.save_dir)
+        pnp.run_pnp()

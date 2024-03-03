@@ -1,0 +1,1 @@
+/home/htr/ClipGuidedEditing/imagic-editing.github.io/
